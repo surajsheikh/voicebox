@@ -235,7 +235,17 @@ def _get_qwen_model_configs() -> list[ModelConfig]:
 
     # mlx-audio can continue after an EOS miss with silence followed by
     # codec noise. Retry only the affected text as smaller chunks.
-    retries_runaway = backend_type == "mlx"
+    #
+    # Fazmo fork: upstream only enabled this for mlx, but the detector
+    # (has_tts_runaway) is a pure audio-level heuristic — speech, long
+    # internal silence, more speech — with no MLX-specific assumptions.
+    # Confirmed live against our own pytorch/CUDA deployment: the same
+    # failure signature (hallucinated content after a long silence gap)
+    # reproduces on pytorch too, triggered by runs of short similarly-
+    # shaped sentences (repeated questions, repeated negations). Enabling
+    # it here is the general fix — it self-heals on ANY text pattern that
+    # trips it, not just the specific ones we've happened to notice.
+    retries_runaway = True
 
     return [
         ModelConfig(
