@@ -111,11 +111,16 @@ class QwenCustomVoiceBackend:
                     low_cpu_mem_usage=False,
                 )
             else:
+                # See pytorch_backend.py's _load_model_sync for why
+                # device_map is avoided here — Qwen3TTSModel's submodules
+                # aren't accelerate-dispatch-aware and are left stranded on
+                # the meta device ("Cannot copy out of meta tensor").
                 self.model = Qwen3TTSModel.from_pretrained(
                     model_path,
-                    device_map=self.device,
                     torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=False,
                 )
+                self.model = self.model.to(self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size

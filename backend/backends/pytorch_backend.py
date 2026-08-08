@@ -113,12 +113,25 @@ class PyTorchTTSBackend:
                     low_cpu_mem_usage=False,
                 )
             else:
+                # device_map=self.device routes loading through accelerate's
+                # meta-device dispatch, but Qwen3TTSModel constructs its
+                # talker/code_predictor/speaker_encoder submodules directly
+                # ("Initializing talker model with default values" in logs)
+                # rather than through accelerate's checkpoint-dispatch path,
+                # so those submodules are left on the meta device with no
+                # data — accelerate never materializes them, and any later
+                # .to()/inference call fails with "Cannot copy out of meta
+                # tensor; no data!". Loading with real tensors up front
+                # (mirroring the CPU branch) and moving the whole model with
+                # a plain .to(device) sidesteps accelerate's dispatch path
+                # entirely, so nothing ends up on meta.
                 self.model = Qwen3TTSModel.from_pretrained(
                     model_path,
                     cache_dir=tts_cache_dir,
-                    device_map=self.device,
                     torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=False,
                 )
+                self.model = self.model.to(self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size
