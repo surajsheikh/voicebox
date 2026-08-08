@@ -20,6 +20,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+from accelerate.hooks import attach_align_device_hook
 
 from . import TTSBackend, LANGUAGE_CODE_TO_NAME
 from .base import (
@@ -123,6 +124,12 @@ class QwenCustomVoiceBackend:
                 # Qwen3TTSModel itself is a plain wrapper with no .to() of
                 # its own — the real nn.Module is the inner .model.
                 self.model.model = self.model.model.to(self.device)
+                # See pytorch_backend.py's identical fix for why this hook
+                # is needed — without device_map, upstream's generate_*
+                # methods that tokenize/build CPU tensors internally have
+                # no way to reach the model's device, since they were
+                # relying on device_map's own hook to do that silently.
+                attach_align_device_hook(self.model.model, execution_device=self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size

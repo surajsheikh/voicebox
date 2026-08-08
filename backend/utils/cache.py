@@ -46,12 +46,23 @@ def get_cache_key(audio_path: str, reference_text: str) -> str:
 
 def get_cached_voice_prompt(
     cache_key: str,
+    map_location: Optional[Union[str, torch.device]] = None,
 ) -> Optional[Union[torch.Tensor, Dict[str, Any]]]:
     """
     Get cached voice prompt if available.
 
     Args:
         cache_key: Cache key
+        map_location: Device to load cached tensors onto. Without this,
+            torch.load restores tensors to whatever device they were saved
+            from — a prompt cached while running on CPU (or during a prior
+            failed CUDA load) silently stays on CPU forever, even after the
+            model has since loaded correctly onto CUDA. Confirmed live:
+            "Expected all tensors to be on the same device, but got index is
+            on cpu, different from other tensors on cuda:0" at generation
+            time, with no error at cache-load time — torch.load doesn't
+            validate device consistency itself, it fails at the actual
+            index_select in the forward pass.
 
     Returns:
         Cached voice prompt (dict or tensor) or None
@@ -64,7 +75,7 @@ def get_cached_voice_prompt(
     cache_file = _get_cache_dir() / f"{cache_key}.prompt"
     if cache_file.exists():
         try:
-            prompt = torch.load(cache_file, weights_only=True)
+            prompt = torch.load(cache_file, weights_only=True, map_location=map_location)
             _memory_cache[cache_key] = prompt
             return prompt
         except Exception:

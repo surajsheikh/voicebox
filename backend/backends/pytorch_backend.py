@@ -7,6 +7,7 @@ import asyncio
 import logging
 import torch
 import numpy as np
+from accelerate.hooks import attach_align_device_hook
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,28 @@ class PyTorchTTSBackend:
                 # device placement is the inner .model
                 # (Qwen3TTSForConditionalGeneration, a real nn.Module).
                 self.model.model = self.model.model.to(self.device)
+                # Loading without device_map means we also lose the
+                # accelerate pre-forward hook that device_map installs,
+                # which is what silently moved caller-supplied CPU tensors
+                # onto the model's device on every forward call. Confirmed
+                # live: upstream's generate_voice_clone() tokenizes text via
+                # self._tokenize_texts(...) (a plain CPU tensor, HF
+                # tokenizers always return CPU by default) and passes it
+                # straight into self.model.generate(input_ids=...) with no
+                # device handling of its own anywhere in that function - it
+                # was relying entirely on device_map's hook to paper over
+                # that gap. Without device_map, that call hits "Expected
+                # all tensors to be on the same device, but got index is on
+                # cpu, different from other tensors on cuda:0". Explicitly
+                # attaching the same hook accelerate would have installed
+                # restores automatic CPU->device tensor alignment on every
+                # forward call, without going through device_map's
+                # meta-device loading path (which is what caused the
+                # earlier "Cannot copy out of meta tensor" failure this
+                # whole branch exists to avoid). Verified live: a CPU index
+                # tensor fed into a CUDA nn.Embedding after this call
+                # resolves correctly instead of raising.
+                attach_align_device_hook(self.model.model, execution_device=self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size
@@ -175,7 +198,7 @@ class PyTorchTTSBackend:
         # Check cache if enabled
         if use_cache:
             cache_key = get_cache_key(audio_path, reference_text)
-            cached_prompt = get_cached_voice_prompt(cache_key)
+            cached_prompt = get_cached_voice_prompt(cache_key, map_location=self.device)
             if cached_prompt is not None:
                 # Cache stores as torch.Tensor but actual prompt is dict
                 # Convert if needed
