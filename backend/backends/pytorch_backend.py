@@ -122,16 +122,21 @@ class PyTorchTTSBackend:
                 # data — accelerate never materializes them, and any later
                 # .to()/inference call fails with "Cannot copy out of meta
                 # tensor; no data!". Loading with real tensors up front
-                # (mirroring the CPU branch) and moving the whole model with
-                # a plain .to(device) sidesteps accelerate's dispatch path
-                # entirely, so nothing ends up on meta.
+                # (mirroring the CPU branch) sidesteps accelerate's dispatch
+                # path entirely, so nothing ends up on meta.
                 self.model = Qwen3TTSModel.from_pretrained(
                     model_path,
                     cache_dir=tts_cache_dir,
                     torch_dtype=torch.bfloat16,
                     low_cpu_mem_usage=False,
                 )
-                self.model = self.model.to(self.device)
+                # Qwen3TTSModel is a plain wrapper (model/processor/
+                # generate_defaults), not an nn.Module itself — it has no
+                # .to() of its own ("'Qwen3TTSModel' object has no attribute
+                # 'to'", confirmed live). The actual PyTorch model requiring
+                # device placement is the inner .model
+                # (Qwen3TTSForConditionalGeneration, a real nn.Module).
+                self.model.model = self.model.model.to(self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size

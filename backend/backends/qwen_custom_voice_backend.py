@@ -120,7 +120,9 @@ class QwenCustomVoiceBackend:
                     torch_dtype=torch.bfloat16,
                     low_cpu_mem_usage=False,
                 )
-                self.model = self.model.to(self.device)
+                # Qwen3TTSModel itself is a plain wrapper with no .to() of
+                # its own — the real nn.Module is the inner .model.
+                self.model.model = self.model.model.to(self.device)
 
         self._current_model_size = model_size
         self.model_size = model_size
