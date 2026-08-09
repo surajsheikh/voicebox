@@ -147,6 +147,16 @@ class QwenCustomVoiceBackend:
                 # no way to reach the model's device, since they were
                 # relying on device_map's own hook to do that silently.
                 attach_align_device_hook(self.model.model, execution_device=self.device)
+                # See pytorch_backend.py's identical fix for the full story
+                # — this is THE actual root cause of multi-minute
+                # generations, not the attention implementation. speech_
+                # tokenizer is a plain Python wrapper, not an nn.Module, so
+                # the .to(self.device) above never reaches its inner .model
+                # (confirmed live: left on cpu, silently). Its own .device
+                # attribute is also a stale plain attribute from
+                # construction, not something that tracks the real device.
+                self.model.model.speech_tokenizer.model = self.model.model.speech_tokenizer.model.to(self.device)
+                self.model.model.speech_tokenizer.device = self.device
 
         self._current_model_size = model_size
         self.model_size = model_size

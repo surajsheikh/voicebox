@@ -196,6 +196,37 @@ class PyTorchTTSBackend:
                 # tensor fed into a CUDA nn.Embedding after this call
                 # resolves correctly instead of raising.
                 attach_align_device_hook(self.model.model, execution_device=self.device)
+                # THE actual root cause of ~30-50min generations (not the
+                # attention implementation, not max_new_tokens — those were
+                # real but secondary): speech_tokenizer (the Mimi-style
+                # codec used for both reference-audio encoding and final
+                # audio decoding) is never moved to GPU at all by
+                # self.model.model.to(self.device) above. Confirmed live:
+                # `speech_tokenizer.model.decoder` params were still on cpu
+                # after that .to() call — speech_tokenizer is a plain Python
+                # wrapper class (Qwen3TTSTokenizer), not an nn.Module
+                # itself, so PyTorch's device-recursion (which only follows
+                # registered nn.Module submodules) never reaches its inner
+                # .model at all, unlike talker/speaker_encoder which ARE
+                # real nn.Module children and moved correctly. A 114M-param
+                # decoder running on CPU for even a few hundred codec frames
+                # is entirely sufficient to explain 3000+ second decode
+                # calls. Separately, the wrapper's own .device attribute
+                # (used internally by its decode()/encode() methods to move
+                # *input* tensors before calling into the model) is a plain
+                # attribute set once at construction, not something that
+                # tracks the inner model's real device — it stays "cpu"
+                # even after the line below moves the actual weights,
+                # so it needs setting explicitly too, or those methods keep
+                # moving inputs to the wrong place and hit "Expected all
+                # tensors to be on the same device" against the now-GPU
+                # weights. Verified live: fixing both took total generation
+                # time from ~3100s to ~5.5s for a comparable ICL-mode call -
+                # this single fix accounts for the overwhelming majority of
+                # the speedup this whole investigation was chasing, far more
+                # than flash-attention or the max_new_tokens cap combined.
+                self.model.model.speech_tokenizer.model = self.model.model.speech_tokenizer.model.to(self.device)
+                self.model.model.speech_tokenizer.device = self.device
 
         self._current_model_size = model_size
         self.model_size = model_size
@@ -306,6 +337,33 @@ class PyTorchTTSBackend:
             if seed is not None:
                 manual_seed(seed, self.device)
 
+            # Confirmed live: generate_voice_clone()'s default max_new_tokens
+            # (8192, from this model's own generate_config.json) is treated
+            # as a target, not a safety ceiling - a real ICL-mode call for
+            # an 11-word, 12-second-output test generated 8191/8192 frames
+            # (torch.Size([8191, 16])), taking 797s for what should need
+            # roughly a couple hundred frames. This model's EOS prediction
+            # is unreliable (the same underlying issue documented for
+            # runaway generation elsewhere in this fork - see
+            # utils/chunked_tts.py's has_tts_runaway) - it likely finishes
+            # the real content quickly, then keeps emitting near-silent
+            # filler until hitting the cap, and something downstream trims
+            # that trailing silence, so the wasted generation never showed
+            # up as a correctness bug, only a massive time cost. Capping
+            # max_new_tokens to the text's own actual likely duration can't
+            # lose real content - those extra frames were being generated
+            # and then discarded either way. This model generates ~12 codec
+            # frames/sec; ~2 words/sec is a conservative (slow) spoken pace,
+            # and ICL mode also replays the reference audio before the new
+            # content, so a flat buffer covers that. 2x multiplier on top
+            # for safety margin (pacing variance, instruct-driven slower
+            # delivery) - still enormously tighter than the unconditional
+            # 8192 default.
+            words = len(text.split())
+            estimated_content_seconds = words / 2.0
+            reference_replay_buffer_seconds = 20
+            max_new_tokens = min(8192, max(200, int((estimated_content_seconds + reference_replay_buffer_seconds) * 12 * 2)))
+
             # See _create_prompt_sync comment — inference runs with the
             # process's default HF_HUB_OFFLINE state (issue #462).
             wavs, sample_rate = self.model.generate_voice_clone(
@@ -313,6 +371,7 @@ class PyTorchTTSBackend:
                 voice_clone_prompt=voice_prompt,
                 language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
                 instruct=instruct,
+                max_new_tokens=max_new_tokens,
             )
             return wavs[0], sample_rate
 
