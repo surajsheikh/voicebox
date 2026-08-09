@@ -125,11 +125,31 @@ class PyTorchTTSBackend:
                 # tensor; no data!". Loading with real tensors up front
                 # (mirroring the CPU branch) sidesteps accelerate's dispatch
                 # path entirely, so nothing ends up on meta.
+                # Confirmed live: installing flash-attn alone doesn't make
+                # anything use it — HF's from_pretrained defaults to eager/
+                # sdpa attention unless explicitly told otherwise, and this
+                # custom model class doesn't auto-detect it. Without this,
+                # a 12-second clip took ~30 minutes end-to-end in
+                # production (ICL mode); passing attn_implementation
+                # explicitly when flash_attn is actually importable took
+                # generate_voice_clone() down to ~4.4 minutes for a
+                # comparable clip in the same live test. try/except keeps
+                # this best-effort, matching flash-attn's own install step
+                # above — a node where the from-source compile didn't
+                # produce a working flash_attn (or wasn't rebuilt yet)
+                # still falls back to the slower default path instead of
+                # crashing model load entirely.
+                try:
+                    import flash_attn  # noqa: F401
+                    attn_kwargs = {"attn_implementation": "flash_attention_2"}
+                except ImportError:
+                    attn_kwargs = {}
                 self.model = Qwen3TTSModel.from_pretrained(
                     model_path,
                     cache_dir=tts_cache_dir,
                     torch_dtype=torch.bfloat16,
                     low_cpu_mem_usage=False,
+                    **attn_kwargs,
                 )
                 # Qwen3TTSModel is a plain wrapper (model/processor/
                 # generate_defaults), not an nn.Module itself — it has no

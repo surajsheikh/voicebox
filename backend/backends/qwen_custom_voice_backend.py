@@ -116,10 +116,18 @@ class QwenCustomVoiceBackend:
                 # device_map is avoided here — Qwen3TTSModel's submodules
                 # aren't accelerate-dispatch-aware and are left stranded on
                 # the meta device ("Cannot copy out of meta tensor").
+                # See pytorch_backend.py's identical fix — flash_attn being
+                # installed doesn't get used unless explicitly requested.
+                try:
+                    import flash_attn  # noqa: F401
+                    attn_kwargs = {"attn_implementation": "flash_attention_2"}
+                except ImportError:
+                    attn_kwargs = {}
                 self.model = Qwen3TTSModel.from_pretrained(
                     model_path,
                     torch_dtype=torch.bfloat16,
                     low_cpu_mem_usage=False,
+                    **attn_kwargs,
                 )
                 # Qwen3TTSModel itself is a plain wrapper with no .to() of
                 # its own — the real nn.Module is the inner .model.
