@@ -366,30 +366,12 @@ class PyTorchTTSBackend:
 
             # See _create_prompt_sync comment — inference runs with the
             # process's default HF_HUB_OFFLINE state (issue #462).
-            #
-            # repetition_penalty nudged up from this model's own default
-            # (1.05) to 1.15 (Fazmo fork) — confirmed live a real generation
-            # got stuck looping one script sentence verbatim ~15x over ~340s
-            # before self-correcting (transcribed + diffed against the
-            # source script). A first attempt at fixing this also lowered
-            # temperature/top_p/top_k and added no_repeat_ngram_size, which
-            # broke generation outright in production ("Cannot copy out of
-            # meta tensor") — turned out no_repeat_ngram_size isn't even a
-            # recognized parameter on this model's custom generate() (fixed
-            # arg list, silently dropped into an unused **kwargs — confirmed
-            # by reading qwen_tts's own Qwen3TTSForConditionalGeneration.
-            # generate source), so it did nothing either way; the crash came
-            # from destabilizing temperature/top_p/top_k together. This is a
-            # much smaller, single-parameter nudge instead — repetition_
-            # penalty is the one lever actually wired to what caused the
-            # loop, everything else stays at its proven-stable default.
             wavs, sample_rate = self.model.generate_voice_clone(
                 text=text,
                 voice_clone_prompt=voice_prompt,
                 language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
                 instruct=instruct,
                 max_new_tokens=max_new_tokens,
-                repetition_penalty=1.15,
             )
             return wavs[0], sample_rate
 
