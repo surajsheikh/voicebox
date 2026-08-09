@@ -128,20 +128,36 @@ class PyTorchTTSBackend:
                 # Confirmed live: installing flash-attn alone doesn't make
                 # anything use it — HF's from_pretrained defaults to eager/
                 # sdpa attention unless explicitly told otherwise, and this
-                # custom model class doesn't auto-detect it. Without this,
-                # a 12-second clip took ~30 minutes end-to-end in
-                # production (ICL mode); passing attn_implementation
-                # explicitly when flash_attn is actually importable took
-                # generate_voice_clone() down to ~4.4 minutes for a
-                # comparable clip in the same live test. try/except keeps
-                # this best-effort, matching flash-attn's own install step
-                # above — a node where the from-source compile didn't
-                # produce a working flash_attn (or wasn't rebuilt yet)
-                # still falls back to the slower default path instead of
-                # crashing model load entirely.
+                # custom model class doesn't auto-detect it. In x-vector
+                # mode (no ref_text), a plain string attn_implementation=
+                # "flash_attention_2" cut generate_voice_clone() from ~30min
+                # to ~4.4min live. But ICL mode (real profiles - the ref_text/
+                # ref_code path this backend actually uses in production)
+                # additionally runs reference audio through the Mimi codec
+                # (transformers.models.mimi), which is NOT one of this
+                # model's registered sub_configs (only talker_config and
+                # speaker_encoder_config are, confirmed live via
+                # config.sub_configs) but still inherits the plain string via
+                # HF's generic recursive config propagation. Mimi's own RoPE
+                # forward does `torch.autocast(device_type=x.device.type,
+                # enabled=False)` to force float32 - something about flash
+                # attention's own dtype/autocast state corrupts that call,
+                # confirmed live: "RuntimeError: unsupported scalarType"
+                # inside modeling_mimi.py, immediately crashing every ICL
+                # generation on this same image that worked fine in x-vector
+                # mode. Scoping attn_implementation as a dict to only the
+                # two real sub_configs avoids ever touching Mimi's own
+                # attention implementation - confirmed live this fixes the
+                # crash and still gets a real (smaller, ~30min->~20min)
+                # speedup from flash attention on the talker's autoregressive
+                # loop, which dominates generation cost either way.
                 try:
                     import flash_attn  # noqa: F401
-                    attn_kwargs = {"attn_implementation": "flash_attention_2"}
+                    attn_kwargs = {"attn_implementation": {
+                        "talker_config": "flash_attention_2",
+                        "speaker_encoder_config": "flash_attention_2",
+                        "": "eager",
+                    }}
                 except ImportError:
                     attn_kwargs = {}
                 self.model = Qwen3TTSModel.from_pretrained(

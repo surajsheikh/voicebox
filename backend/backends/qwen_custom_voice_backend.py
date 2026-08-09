@@ -116,11 +116,20 @@ class QwenCustomVoiceBackend:
                 # device_map is avoided here — Qwen3TTSModel's submodules
                 # aren't accelerate-dispatch-aware and are left stranded on
                 # the meta device ("Cannot copy out of meta tensor").
-                # See pytorch_backend.py's identical fix — flash_attn being
-                # installed doesn't get used unless explicitly requested.
+                # See pytorch_backend.py's identical fix for the full story
+                # — a plain string attn_implementation="flash_attention_2"
+                # propagates into the Mimi codec submodule too (not one of
+                # this model's registered sub_configs, but still inherited
+                # via HF's generic recursive config propagation) and crashes
+                # it with "RuntimeError: unsupported scalarType" in ICL mode.
+                # Scoping to just the two real sub_configs avoids that.
                 try:
                     import flash_attn  # noqa: F401
-                    attn_kwargs = {"attn_implementation": "flash_attention_2"}
+                    attn_kwargs = {"attn_implementation": {
+                        "talker_config": "flash_attention_2",
+                        "speaker_encoder_config": "flash_attention_2",
+                        "": "eager",
+                    }}
                 except ImportError:
                     attn_kwargs = {}
                 self.model = Qwen3TTSModel.from_pretrained(
