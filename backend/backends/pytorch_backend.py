@@ -366,12 +366,34 @@ class PyTorchTTSBackend:
 
             # See _create_prompt_sync comment — inference runs with the
             # process's default HF_HUB_OFFLINE state (issue #462).
+            #
+            # Decoding constraints below (Fazmo fork): qwen_tts's library
+            # defaults (do_sample=True, top_k=50, top_p=1.0, temperature=0.9,
+            # repetition_penalty=1.05) leave the model free to wander far
+            # from the reference text — confirmed live: a real generation
+            # got stuck looping one sentence from the script verbatim ~15x
+            # over ~340s before self-correcting (transcribed + diffed
+            # against the source script to confirm). The goal here is not
+            # "detect and retry after the fact" (has_tts_runaway only
+            # catches the OTHER failure shape — speech/silence-gap/garbage —
+            # not a continuous repetition loop with no silence). Instead,
+            # tighten decoding so this class of drift is far less likely to
+            # occur in the first place: lower temperature/top_p narrow the
+            # sampling pool toward the model's most confident (most
+            # text-faithful) continuation, and no_repeat_ngram_size is a
+            # hard constraint (not just a penalty) against the exact
+            # token-sequence repeats this incident exhibited.
             wavs, sample_rate = self.model.generate_voice_clone(
                 text=text,
                 voice_clone_prompt=voice_prompt,
                 language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
                 instruct=instruct,
                 max_new_tokens=max_new_tokens,
+                temperature=0.6,
+                top_p=0.85,
+                top_k=30,
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=6,
             )
             return wavs[0], sample_rate
 

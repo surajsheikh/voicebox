@@ -248,6 +248,16 @@ class QwenCustomVoiceBackend:
             # state. Forcing offline here (issue #462) regressed online
             # users whose libraries issue legitimate metadata lookups
             # during generation.
+            #
+            # See pytorch_backend.py's generate() for the full rationale —
+            # same tightened decoding constraints applied here for
+            # consistency, since this backend shares the same qwen_tts
+            # library and underlying repetition-loop failure mode.
+            kwargs.setdefault("temperature", 0.6)
+            kwargs.setdefault("top_p", 0.85)
+            kwargs.setdefault("top_k", 30)
+            kwargs.setdefault("repetition_penalty", 1.2)
+            kwargs.setdefault("no_repeat_ngram_size", 6)
             wavs, sample_rate = self.model.generate_custom_voice(**kwargs)
             return wavs[0], sample_rate
 
