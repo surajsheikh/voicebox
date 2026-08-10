@@ -393,12 +393,26 @@ class PyTorchTTSBackend:
 
             # See _create_prompt_sync comment — inference runs with the
             # process's default HF_HUB_OFFLINE state (issue #462).
+            #
+            # repetition_penalty nudged up from this model's own default
+            # (1.05) to 1.15 — confirmed live (multiple real jobs) the model
+            # gets stuck looping a script sentence/phrase verbatim dozens of
+            # times before self-correcting. Two earlier attempts at this
+            # exact fix (this one, and a broader temp/top_p/top_k version)
+            # both appeared to break generation entirely in production
+            # ("Cannot copy out of meta tensor") — but that crash was
+            # root-caused to an unrelated concurrent-model-load race in
+            # load_model_async (now fixed with a lock, see that method's
+            # comment) that reproduced identically on pure default decode
+            # params too. With the actual race fixed, retrying this small,
+            # single-parameter nudge.
             wavs, sample_rate = self.model.generate_voice_clone(
                 text=text,
                 voice_clone_prompt=voice_prompt,
                 language=LANGUAGE_CODE_TO_NAME.get(language, "auto"),
                 instruct=instruct,
                 max_new_tokens=max_new_tokens,
+                repetition_penalty=1.15,
             )
             return wavs[0], sample_rate
 
