@@ -32,6 +32,7 @@ class PyTorchTTSBackend:
         self.model_size = model_size
         self.device = self._get_device()
         self._current_model_size = None
+        self._load_lock = asyncio.Lock()
 
     def _get_device(self) -> str:
         """Get the best available device."""
@@ -74,16 +75,42 @@ class PyTorchTTSBackend:
         if model_size is None:
             model_size = self.model_size
 
-        # If already loaded with correct size, return
+        # If already loaded with correct size, return — cheap fast-path check
+        # before taking the lock (avoids lock contention on the hot path once
+        # the model is warm).
         if self.model is not None and self._current_model_size == model_size:
             return
 
-        # Unload existing model if different size requested
-        if self.model is not None and self._current_model_size != model_size:
-            self.unload_model()
+        # Confirmed live: this was a classic check-then-act race with no
+        # lock. Voicebox's own /models/download and /models/load endpoints
+        # (triggered directly by voice-worker.ts's ensureModelReady() on
+        # every retry — NOT routed through this server's serialized
+        # generation queue) can be called multiple times in overlapping
+        # succession: each BullMQ chunk retry that hits the 180s cold-start
+        # ceiling fires its OWN fresh download/load request without
+        # checking whether a prior one is still in flight. Two concurrent
+        # calls into this method both used to pass the `self.model is None`
+        # check and both proceed to build a NEW Qwen3TTSModel and assign it
+        # to self.model + manually place its submodules on device — one
+        # call's in-progress construction could be overwritten mid-flight
+        # by the other's assignment, leaving some submodules from the
+        # losing call's instance stranded on the meta device. Every
+        # subsequent generate() call then failed identically with "Cannot
+        # copy out of meta tensor" for the rest of that process's lifetime.
+        # An asyncio.Lock makes concurrent callers await the SAME in-flight
+        # load instead of racing to start their own.
+        async with self._load_lock:
+            # Re-check inside the lock — a concurrent caller may have
+            # already finished loading while we were waiting for it.
+            if self.model is not None and self._current_model_size == model_size:
+                return
 
-        # Run blocking load in thread pool
-        await asyncio.to_thread(self._load_model_sync, model_size)
+            # Unload existing model if different size requested
+            if self.model is not None and self._current_model_size != model_size:
+                self.unload_model()
+
+            # Run blocking load in thread pool
+            await asyncio.to_thread(self._load_model_sync, model_size)
 
     # Alias for compatibility
     load_model = load_model_async
