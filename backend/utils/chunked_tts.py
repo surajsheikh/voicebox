@@ -214,7 +214,6 @@ async def generate_chunked(
     crossfade_ms: int = 50,
     trim_fn=None,
     runaway_detector=None,
-    phrase_repetition_detector=None,
 ) -> Tuple[np.ndarray, int]:
     """Generate audio with automatic chunking for long text.
 
@@ -246,11 +245,6 @@ async def generate_chunked(
     runaway_detector : callable | None
         Optional ``(audio, sample_rate) -> bool`` detector. When it flags
         unstable output, the affected text is split in half and retried.
-    phrase_repetition_detector : callable | None
-        Optional ``(audio, sample_rate, source_text) -> bool`` detector
-        (see utils/repetition.py) — a different failure shape than
-        runaway_detector: a phrase looped verbatim with continuous
-        speech and no silence gap. Reuses the same split-and-retry path.
 
     Returns
     -------
@@ -270,12 +264,7 @@ async def generate_chunked(
         )
 
         is_unstable = runaway_detector is not None and runaway_detector(chunk_audio, chunk_sr)
-        is_repeating = (
-            not is_unstable
-            and phrase_repetition_detector is not None
-            and phrase_repetition_detector(chunk_audio, chunk_sr, chunk_text)
-        )
-        if is_unstable or is_repeating:
+        if is_unstable:
             if retry_depth >= MAX_RUNAWAY_RETRIES or len(chunk_text) <= MIN_RUNAWAY_RETRY_CHARS:
                 raise RuntimeError(
                     "TTS output remained unstable after retrying smaller text chunks"

@@ -409,11 +409,23 @@ class PyTorchTTSBackend:
             # generate()'s underlying HF GenerationMixin call, where HF's
             # own NoRepeatNGramLogitsProcessor makes a repeated token n-gram
             # a hard impossibility for the rest of the sequence, not just
-            # discouraged. 16 codec frames (~1.3s at this model's 12Hz
-            # frame rate) is short enough to catch the multi-second phrase
-            # loops observed live, long enough that legitimate short
-            # recurring acoustic patterns (brief pauses, common phonemes)
-            # shouldn't get forced into unnatural alternatives.
+            # discouraged.
+            #
+            # 16 codec frames (first attempt) was tuned against the
+            # sentence-scale loops seen earlier and confirmed live NOT
+            # sufficient: a real job still produced several short 1-3 word
+            # loops (e.g. "it means understanding boundaries" x70,
+            # "Planner Executives" x60) that the constraint never caught.
+            # Root cause: the hard block only fires once the SAME n-gram
+            # recurs — if the actual repeating unit is itself shorter than
+            # n frames, no single n-length window is ever identical twice,
+            # even though the audible phrase clearly repeats (sampling
+            # variance at the window edges keeps every 16-frame slice
+            # technically distinct). 6 frames (~0.5s) is short enough to
+            # fit inside even a 1-2 word repeat unit while still being long
+            # enough that legitimate brief recurring sounds (a single
+            # phoneme, a short pause) shouldn't get forced into unnatural
+            # alternatives.
             wavs, sample_rate = self.model.generate_voice_clone(
                 text=text,
                 voice_clone_prompt=voice_prompt,
@@ -421,7 +433,7 @@ class PyTorchTTSBackend:
                 instruct=instruct,
                 max_new_tokens=max_new_tokens,
                 repetition_penalty=1.15,
-                no_repeat_ngram_size=16,
+                no_repeat_ngram_size=6,
             )
             return wavs[0], sample_rate
 

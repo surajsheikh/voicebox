@@ -354,17 +354,14 @@ async def stream_speech(
 
     trim_fn = None
     runaway_detector = None
-    phrase_repetition_detector = None
     if engine_needs_trim(engine):
         from ..utils.audio import trim_tts_output
 
         trim_fn = trim_tts_output
     if engine_retries_runaway(engine):
         from ..utils.audio import has_tts_runaway
-        from ..utils.repetition import has_phrase_repetition
 
         runaway_detector = has_tts_runaway
-        phrase_repetition_detector = has_phrase_repetition
 
     audio, sample_rate = await generate_chunked(
         tts_model,
@@ -377,7 +374,6 @@ async def stream_speech(
         crossfade_ms=data.crossfade_ms,
         trim_fn=trim_fn,
         runaway_detector=runaway_detector,
-        phrase_repetition_detector=phrase_repetition_detector,
     )
 
     effects_chain_config = None

@@ -267,7 +267,7 @@ class QwenCustomVoiceBackend:
             # backend shares the same qwen_tts library and repetition-loop
             # failure mode.
             kwargs.setdefault("repetition_penalty", 1.15)
-            kwargs.setdefault("no_repeat_ngram_size", 16)
+            kwargs.setdefault("no_repeat_ngram_size", 6)
             wavs, sample_rate = self.model.generate_custom_voice(**kwargs)
             return wavs[0], sample_rate
 
