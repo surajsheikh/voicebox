@@ -24,6 +24,79 @@ from ..utils.cache import get_cache_key, get_cached_voice_prompt, cache_voice_pr
 from ..utils.audio import load_audio
 
 
+# ── Repetition-loop diagnostic (temporary — Fazmo fork) ──────────────────
+# Confirmed live: repetition-loop hallucinations (a short phrase spoken
+# verbatim 15-70+ times) still occur even with no_repeat_ngram_size=6 set
+# on generate_voice_clone(). That parameter is a HARD constraint — HF's
+# NoRepeatNGramLogitsProcessor makes an exact repeated token n-gram
+# literally impossible for the rest of the sequence. If loops are still
+# audible with it active, either (a) the constraint isn't actually being
+# applied/reaching the talker's real generate() call despite earlier
+# fixes, or (b) each "repeat" is a genuinely DIFFERENT token sequence that
+# just decodes to near-identical-sounding audio, in which case an
+# exact-token-match constraint structurally cannot prevent it no matter
+# how small n is set — this determines which of those it is empirically.
+#
+# Wraps speech_tokenizer.decode (installed once per model load) to
+# capture the raw codec tokens right before they're rendered to audio and
+# check for literal exact n-gram repeats within them — the ground truth,
+# independent of whether the LogitsProcessor believes it's enforcing
+# anything. Pure side-effect logging only; never changes what's decoded
+# or returned. Remove once the actual mechanism is understood and fixed.
+_REPEAT_DIAGNOSTIC_NGRAM_SIZES = (6, 10, 16)
+
+
+def _find_exact_ngram_repeats(codes, n: int):
+    seq = codes[:, 0].tolist()  # first codebook only, matches this model's own EOS-detection stream
+    seen = {}
+    repeats = []
+    for i in range(len(seq) - n + 1):
+        gram = tuple(seq[i:i + n])
+        if gram in seen:
+            repeats.append((seen[gram], i))
+        else:
+            seen[gram] = i
+    return repeats
+
+
+def _install_repeat_diagnostic(inner_model) -> None:
+    tokenizer = inner_model.speech_tokenizer
+    if getattr(tokenizer, "_fazmo_repeat_diagnostic_installed", False):
+        return
+    real_decode = tokenizer.decode
+
+    def patched_decode(items, *args, **kwargs):
+        try:
+            for item in items:
+                codes = item.get("audio_codes")
+                if codes is None:
+                    continue
+                codes_np = codes.detach().cpu().numpy() if hasattr(codes, "detach") else codes
+                total_frames = codes_np.shape[0]
+                for n in _REPEAT_DIAGNOSTIC_NGRAM_SIZES:
+                    repeats = _find_exact_ngram_repeats(codes_np, n)
+                    if repeats:
+                        logger.warning(
+                            "REPEAT_DIAGNOSTIC: exact %d-gram repeat found in %d-frame codec "
+                            "sequence — %d occurrence(s), first at frame %d -> frame %d (gap=%d)",
+                            n, total_frames, len(repeats), repeats[0][0], repeats[0][1],
+                            repeats[0][1] - repeats[0][0],
+                        )
+                        break  # smallest n already found is the most informative; skip larger n
+                else:
+                    logger.info(
+                        "REPEAT_DIAGNOSTIC: no exact n-gram repeat found (n=%s) in %d-frame "
+                        "codec sequence",
+                        _REPEAT_DIAGNOSTIC_NGRAM_SIZES, total_frames,
+                    )
+        except Exception:
+            logger.exception("REPEAT_DIAGNOSTIC: check itself failed, continuing normally")
+        return real_decode(items, *args, **kwargs)
+
+    tokenizer.decode = patched_decode
+    tokenizer._fazmo_repeat_diagnostic_installed = True
+
+
 class PyTorchTTSBackend:
     """PyTorch-based TTS backend using Qwen3-TTS."""
 
@@ -254,6 +327,8 @@ class PyTorchTTSBackend:
                 # than flash-attention or the max_new_tokens cap combined.
                 self.model.model.speech_tokenizer.model = self.model.model.speech_tokenizer.model.to(self.device)
                 self.model.model.speech_tokenizer.device = self.device
+
+                _install_repeat_diagnostic(self.model.model)
 
         self._current_model_size = model_size
         self.model_size = model_size
