@@ -261,10 +261,13 @@ class QwenCustomVoiceBackend:
             # during generation.
             #
             # See pytorch_backend.py's generate() for the full rationale —
-            # same repetition_penalty nudge (1.05 -> 1.15) applied here for
-            # consistency, since this backend shares the same qwen_tts
-            # library and repetition-loop failure mode.
+            # same repetition_penalty nudge (1.05 -> 1.15) and the actual
+            # root-cause no_repeat_ngram_size hard constraint (Fazmo fork
+            # of qwen_tts itself) applied here for consistency, since this
+            # backend shares the same qwen_tts library and repetition-loop
+            # failure mode.
             kwargs.setdefault("repetition_penalty", 1.15)
+            kwargs.setdefault("no_repeat_ngram_size", 16)
             wavs, sample_rate = self.model.generate_custom_voice(**kwargs)
             return wavs[0], sample_rate
 
