@@ -19,7 +19,7 @@ logger = logging.getLogger("voicebox.chunked-tts")
 
 # Default chunk size in characters.  Can be overridden per-request via
 # the ``max_chunk_chars`` field on GenerationRequest.
-DEFAULT_MAX_CHUNK_CHARS = 800
+DEFAULT_MAX_CHUNK_CHARS = 1200
 MAX_RUNAWAY_RETRIES = 1
 MIN_RUNAWAY_RETRY_CHARS = 100
 
