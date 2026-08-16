@@ -115,13 +115,18 @@ def has_tts_runaway(
     sample_rate: int = 24000,
     frame_ms: int = 20,
     silence_threshold_db: float = -40.0,
-    max_internal_silence_ms: int = 2000,
+    max_internal_silence_ms: int = 4000,
 ) -> bool:
     """Detect speech followed by a long silence and then more output.
 
     This shape is a reliable signal that a TTS model missed EOS and resumed
     with hallucinated speech or codec noise. Leading and trailing silence do
     not count because they are not bounded by non-silent audio.
+
+    Threshold raised from 2000ms to 4000ms: ICL-mode voice cloning produces
+    a normal ~2-3s silence gap at the reference-to-content transition that
+    was being flagged as a runaway, causing deterministic failures on every
+    profile. Real runaways produce 5-10+ second gaps.
     """
     frame_len = int(sample_rate * frame_ms / 1000)
     if frame_len == 0 or len(audio) < frame_len:
