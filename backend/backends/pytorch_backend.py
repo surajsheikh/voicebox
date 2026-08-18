@@ -455,16 +455,32 @@ class PyTorchTTSBackend:
             # max_new_tokens to the text's own actual likely duration can't
             # lose real content - those extra frames were being generated
             # and then discarded either way. This model generates ~12 codec
-            # frames/sec; ~2 words/sec is a conservative (slow) spoken pace,
-            # and ICL mode also replays the reference audio before the new
-            # content, so a flat buffer covers that. 2x multiplier on top
-            # for safety margin (pacing variance, instruct-driven slower
-            # delivery) - still enormously tighter than the unconditional
-            # 8192 default.
+            # frames/sec; ~2 words/sec is a conservative (slow) spoken pace.
+            #
+            # reference_replay_buffer_seconds retuned 2026-08-18: the flat
+            # 20s assumed here was nearly 2x the REAL measured calibration
+            # audio for a live production profile (confirmed via ffprobe-
+            # equivalent frame count on the actual .wav: 10.6s) - this app's
+            # voice-cloning calibration flow always records against the same
+            # fixed, short onboarding script (see VoiceCloningPage's
+            # calibration prompt), so every profile's reference clip is
+            # similarly short; 12s covers that with real headroom rather
+            # than guessing high. Also moved the 2x safety multiplier to
+            # apply ONLY to the content-pacing estimate, not the reference
+            # buffer too - the old formula applied it to their SUM, silently
+            # doubling the already-oversized buffer's contribution a second
+            # time (20s buffer effectively became a 40s allowance). The
+            # buffer covers a fixed-length replay of a known clip, not
+            # pacing uncertainty, so it doesn't need the same margin.
+            # Confirmed live: a 28-word test that should run ~14s was still
+            # producing 65.2s (near the OLD formula's ~68s ceiling) even
+            # after the unrelated QwenCustomVoiceBackend fix landed, proving
+            # this formula - not that other backend - was the actual path in
+            # use for calibration-based "preset" voices.
             words = len(text.split())
             estimated_content_seconds = words / 2.0
-            reference_replay_buffer_seconds = 20
-            max_new_tokens = min(8192, max(200, int((estimated_content_seconds + reference_replay_buffer_seconds) * 12 * 2)))
+            reference_replay_buffer_seconds = 12
+            max_new_tokens = min(8192, max(200, int(estimated_content_seconds * 12 * 2 + reference_replay_buffer_seconds * 12)))
 
             # See _create_prompt_sync comment — inference runs with the
             # process's default HF_HUB_OFFLINE state (issue #462).
