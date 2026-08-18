@@ -268,6 +268,25 @@ class QwenCustomVoiceBackend:
             # failure mode.
             kwargs.setdefault("repetition_penalty", 1.15)
             kwargs.setdefault("no_repeat_ngram_size", 6)
+
+            # max_new_tokens cap — this backend never got the fix
+            # pytorch_backend.py's generate() received for the identical
+            # problem (see that function's comment for the full writeup).
+            # Confirmed live 2026-08-18: a 28-word preset-voice ("Default
+            # Test Voice 2") narration that should run ~14s produced a
+            # 65.2s file — the model's EOS prediction is unreliable (same
+            # class of issue as has_tts_runaway/§3.7's repetition loops)
+            # and with no cap here it fell through to the model's own
+            # generate_config.json default (8192, a target not a ceiling)
+            # instead of stopping near the real content's actual length.
+            # No reference-replay buffer here (unlike pytorch_backend.py's
+            # ICL/clone path) — CustomVoice doesn't replay reference audio
+            # at all (see create_voice_prompt's docstring above), so that
+            # 20s flat addition would be pure dead weight for this backend.
+            words = len(text.split())
+            estimated_content_seconds = words / 2.0
+            kwargs.setdefault("max_new_tokens", min(8192, max(200, int(estimated_content_seconds * 12 * 2))))
+
             wavs, sample_rate = self.model.generate_custom_voice(**kwargs)
             return wavs[0], sample_rate
 
